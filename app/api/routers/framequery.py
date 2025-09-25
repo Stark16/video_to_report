@@ -17,7 +17,7 @@ inference_semaphore = asyncio.Semaphore(2)
 async def analyze_frames(request: AnalyzeFrame):
     try:
         async with inference_semaphore:
-            results = await asyncio.to_thread(inference_service.analyze_image, request)
+            results = await asyncio.to_thread(inference_service.analyze_image, request, metricsservice=metrics_service)
     except Exception as e:
         traceback.print_exception(e)
         raise HTTPException(status_code=500, detail=f"Internal Server Error - Image Analysis Error: {str(e)}")

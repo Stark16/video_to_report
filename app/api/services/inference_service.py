@@ -9,7 +9,6 @@ from app.core.config import settings
 from app.domain.inference import VLMInference
 from app.api.services.metrics import MetricsService
 
-metricsservice = MetricsService()
 
 class InferenceService:
 
@@ -54,7 +53,7 @@ class InferenceService:
         # Split into batches
         return [imgs[i:i+batch_size] for i in range(0, len(imgs), batch_size)]
     
-    def analyze_image(self, request_payload: AnalyzeFrame):
+    def analyze_image(self, request_payload: AnalyzeFrame, metricsservice: MetricsService):
         start_time = time.time()
 
         decoded_imgs = [self._decode_image(b64) for b64 in request_payload.images]
