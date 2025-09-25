@@ -5,7 +5,9 @@ WORKDIR /app
 COPY ./app ./app
 COPY ./requirements-server.txt .
 
-RUN apt-get update
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 RUN pip install --no-cache-dir -r requirements-server.txt
