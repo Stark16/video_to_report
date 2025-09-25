@@ -1,10 +1,15 @@
 import io
 import base64
+import time
+import torch
 from PIL import Image
 
 from app.api.schemas.schema_framequery import AnalyzeFrame
 from app.core.config import settings
 from app.domain.inference import VLMInference
+from app.api.services.metrics import MetricsService
+
+metricsservice = MetricsService()
 
 class InferenceService:
 
@@ -25,13 +30,43 @@ class InferenceService:
         img_stream = io.BytesIO(img_bytes)
         img = Image.open(img_stream)
         return img
+    
+    def check_free_vram_in_gb(self):
+        if torch.cuda.is_available():
+            gpu_id = torch.cuda.current_device()
+            torch.cuda.empty_cache()
+            total = torch.cuda.get_device_properties(gpu_id).total_memory / 1e9
+            reserved = torch.cuda.memory_reserved(gpu_id) / 1e9
+            allocated = torch.cuda.memory_allocated(gpu_id) / 1e9
+            free = total - reserved - allocated
+            return free
+        else:
+            return None
+    
+    def dynamic_batch(self, imgs, max_batch=8, min_batch=1):
+        free_vram = self.check_free_vram_in_gb()
+        if free_vram is None:
+            batch_size = min(max_batch, len(imgs))
+        else:
+            est_vram_per_img = 0.15  # Adjust based on profiling
+            possible_batch = int(free_vram / est_vram_per_img)
+            batch_size = max(min_batch, min(possible_batch, max_batch))
+        # Split into batches
+        return [imgs[i:i+batch_size] for i in range(0, len(imgs), batch_size)]
+    
+    def analyze_image(self, request_payload: AnalyzeFrame):
+        start_time = time.time()
 
-    def analyze_image(self, request_payload:AnalyzeFrame):
+        decoded_imgs = [self._decode_image(b64) for b64 in request_payload.images]
+
+        batches = self.dynamic_batch(decoded_imgs)
+
         results = []
-        print("\t\t [INFO] Processing Image")
-        for b64_str in request_payload.images:
-            img_decoded = self._decode_image(b64_str)
-            result = self.OBJ_VLMInf.analyze(img_decoded, request_payload.prompt)
-            print(result)
-            results.append(result)
+        for batch in batches:
+            batch_results = self.OBJ_VLMInf.analyze(batch, request_payload.prompt)
+            results.extend(batch_results)
+
+        elapsed = time.time() - start_time
+        metricsservice.update_latency(elapsed)
+
         return results

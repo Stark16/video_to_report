@@ -1,6 +1,6 @@
 # server/app/domain/inference.py
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 import torch
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 import cv2
@@ -18,27 +18,35 @@ class VLMInference:
         self.model = Gemma3ForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.bfloat16 if "cuda" in self.device else torch.float32)
         self.model.to(self.device)
 
-    def analyze(self, image: str, query: str) -> Dict[str, Any]:
-        """Method to run image analysis for a given b64 image and query, returns a single result dictionary.
+    def analyze(self, images: Union[List, Any], query: str) -> List[Dict[str, Any]]:
+        """Run image analysis for a batch of images (or single image) and return a list of result dicts.
 
         Args:
-            image_b64 (str): Input image b64 string
-            query (str): query
+            images: A single image (PIL.Image or compatible) or a list of images to analyze.
+            query: The textual query to run against each image.
 
         Returns:
-            Dict[str, Any]: a result dictionary with parsed output
+            List[Dict[str, Any]]: a list of result dictionaries, one per input image.
         """
+        if not isinstance(images, list):
+            images = [images]
+
         messages = [
             {"role": "user", "content": [
                 {"type": "image", "url": ""},
                 {"type": "text", "text": query}
             ]}
         ]
-        
-        prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-        inputs = self.processor(text=prompt, images=image, return_tensors="pt").to(self.device)
-        
-        # Generate the response
+
+        # Create a prompt per image using the processor's chat template
+        prompts = [self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+                   for _ in images]
+
+        # Tokenize/process the batch and move to device
+        inputs = self.processor(text=prompts, images=images, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        # Generate responses in batch
         with torch.no_grad():
             output_ids = self.model.generate(
                 **inputs,
@@ -47,23 +55,19 @@ class VLMInference:
                 temperature=0.7,
                 top_p=0.95
             )
-        text_output = self.processor.decode(output_ids[0], skip_special_tokens=True)
-        
-        # inputs = self.processor(messages=messages, images=[image], return_tensors="pt").to(self.device)
 
-        # with torch.no_grad():
-        #     outputs = self.model.generate(**inputs, max_new_tokens=128)
-        #     text_output = self.processor.decode(outputs[0], skip_special_tokens=True)
+        # Decode each output into text and build a simple result structure
+        results: List[Dict[str, Any]] = []
+        for i in range(output_ids.shape[0]):
+            text_output = self.processor.decode(output_ids[i], skip_special_tokens=True)
+            results.append({
+                "caption": text_output,
+                "entities": [],
+                "reasoning": text_output,
+                "relevance_score": 0.9
+            })
 
-        # TODO: Real parsing. For now, just a dummy structure.
-        result = {
-            "caption": text_output,
-            "entities": [],
-            "reasoning": text_output,
-            "relevance_score": 0.9
-        }
-
-        return result
+        return results
 
 
 if __name__ == "__main__":
