@@ -3,10 +3,9 @@
 from typing import List, Dict, Any, Union
 import torch
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
-import cv2
+import json
 from PIL import Image
-import base64
-import io
+import re
 from huggingface_hub import login
 from app.core.config import settings
 
@@ -18,7 +17,40 @@ class VLMInference:
         self.model = Gemma3ForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.bfloat16 if "cuda" in self.device else torch.float32)
         self.model.to(self.device)
 
-    def analyze(self, images: Union[List, Any], query: str) -> List[Dict[str, Any]]:
+    def parse_output(self, raw_text: str) -> Dict[str, Any]:
+        """
+        Extract and parse the JSON object from a raw VLM output string.
+
+        Args:
+            raw_text (str): The raw decoded output from the model.
+
+        Returns:
+            Dict[str, Any]: Parsed JSON object with defaults if parsing fails.
+        """
+        
+        match = re.search(r"```json\s*(.*?)\s*```", raw_text, re.DOTALL)
+        if match:
+            json_str = match.group(1)
+        else:
+            # Fallback: try to locate first { ... } block
+            match = re.search(r"(\{.*\})", raw_text, re.DOTALL)
+            if match:
+                json_str = match.group(1)
+            else:
+                json_str = raw_text  # last fallback
+
+        # Step 2: Attempt to parse
+        parsed = json.loads(json_str)
+
+        # Step 3: Normalize fields with defaults
+        return {
+            "caption": parsed.get("caption", ""),
+            "entities": parsed.get("entities", []),
+            "reasoning": parsed.get("reasoning", ""),
+            "relevance_score": float(parsed.get("relevance_score", 0.0)),
+            }
+
+    def analyze(self, images: Union[List, Any], query: str, print_results:bool=False) -> List[Dict[str, Any]]:
         """Run image analysis for a batch of images (or single image) and return a list of result dicts.
 
         Args:
@@ -32,11 +64,18 @@ class VLMInference:
             images = [images]
 
         messages = [
+            {"role": "system", "content": 
+            "You are an image analysis system. Answer only in strict JSON with keys: "
+            "caption (string), reasoning (string), relevance_score (float between 0 and 1), "
+            "and entities (list of strings, may be empty). "
+            "Do not include extra commentary, disclaimers, or text outside JSON."
+            },
             {"role": "user", "content": [
                 {"type": "image", "url": ""},
                 {"type": "text", "text": query}
             ]}
         ]
+
 
         # Create a prompt per image using the processor's chat template
         prompts = [self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -60,26 +99,10 @@ class VLMInference:
         results: List[Dict[str, Any]] = []
         for i in range(output_ids.shape[0]):
             text_output = self.processor.decode(output_ids[i], skip_special_tokens=True)
-            results.append({
-                "caption": text_output,
-                "entities": [],
-                "reasoning": text_output,
-                "relevance_score": 0.9
-            })
+            parsed_output = self.parse_output(text_output)
+            if print_results:
+                print("\n\n", parsed_output, "\n\n")
+            results.append(parsed_output)
 
         return results
-
-
-if __name__ == "__main__":
-    import json
-
-    test_img_path = r"D:\Career\tasks\secura_ai\video_to_report\data\test_images\4K-security-camera-snapshot.jpg"
-    query = "Identify the man standing in front of the camera"
-    OBJ_VLMInfer = VLMInference(device='cuda')
-
-    with open(test_img_path, 'r') as f:
-        img = Image.open(f)
-    
-    results = OBJ_VLMInfer.analyze(img, query)
-    print(json.dumps(results, indent=2))
     
