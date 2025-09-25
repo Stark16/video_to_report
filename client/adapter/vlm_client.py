@@ -58,7 +58,6 @@ class VLMClient:
 
     def process_stream(self, batch_size: int = 1) -> List[Dict]:
         results = []
-        i=3
         while True:
             payload, frames_batch, valid_frame_indices = self.create_payload(batch_size)
             if not payload["images"]:
@@ -86,7 +85,4 @@ class VLMClient:
                     })
                     self.frame_cache[frame_hash] = meta
                     idx_in_batch += 1
-            i-=1
-            if i==0:
-                break
         return results
