@@ -83,7 +83,7 @@ docker compose up --build
 
 This command will build the container image (if not already built), create and start the service container, exposing the app at `http://localhost:8000`.
 
-> **⚠️ Disclaimer:** The initial build process may take significant time (10-30 minutes) depending on your internet connection (for downloading model weights and base images) and your system specifications.
+> **⚠️ Disclaimer:** The initial build process may take significant time (10-30 minutes) depending on your internet connection (for downloading model weights and base images) and your system specifications. If it is taking too long follow these install instructions.
 
 ### Accessing the API
 
