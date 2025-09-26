@@ -9,3 +9,10 @@ services:
       - .env
     volumes:
       - ./.env:/app/.env:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
