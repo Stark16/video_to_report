@@ -76,6 +76,84 @@ def yolo_inference_and_save(top_k_frames: List[Dict[str, Any]], video_name: str,
 
     return enriched_results
 
+def generate_markdown_report(enriched_results: List[Dict], output_dir: str, video_name: str, query: str, metrics: Dict):
+    """
+    Generates a human-readable Markdown report from the analysis results.
+
+    Args:
+        enriched_results: The combined VLM and YOLO results.
+        output_dir: The directory to save the report in.
+        video_name: The name of the video file.
+        query: The user's query.
+        metrics: A dictionary of timing and other metrics.
+    """
+    report_path = os.path.join(output_dir, 'report.md')
+    
+    # --- 1. Generate Summary ---
+    summary_sentences = set()
+    for result in enriched_results:
+        # Use reasoning if available, otherwise caption.
+        reasoning = result.get("vlm_metadata", {}).get("reasoning")
+        if reasoning:
+            summary_sentences.add(reasoning)
+        else:
+            caption = result.get("vlm_metadata", {}).get("caption")
+            if caption:
+                summary_sentences.add(caption)
+    
+    summary = " ".join(list(summary_sentences))
+    if not summary:
+        summary = "No summary could be generated from the VLM results."
+
+    # --- 2. Build Markdown Content ---
+    md_content = [
+        f"# Analysis Report for {video_name}",
+        f"**Query:** `{query}`\n",
+        "## Summary",
+        f"{summary}\n",
+        "## Evidence",
+        "| Thumbnail | VLM Caption & Reasoning | Detected Objects |",
+        "|:---:|:---|:---|"
+    ]
+
+    # --- 3. Populate Evidence Table ---
+    for result in enriched_results:
+        vlm_meta = result.get("vlm_metadata", {})
+        yolo_detections = result.get("yolo_detections", [])
+
+        # Find the best thumbnail (most confident detection)
+        best_detection = max(yolo_detections, key=lambda x: x['confidence'], default=None)
+        
+        if best_detection:
+            # Make thumbnail path relative to the report's location
+            thumb_path = os.path.relpath(best_detection['cropped_image_path'], output_dir)
+            thumb_md = f"![thumbnail]({thumb_path})"
+        else:
+            thumb_md = "No object detected"
+
+        caption = vlm_meta.get('caption', 'N/A')
+        reasoning = vlm_meta.get('reasoning', 'N/A')
+        vlm_text = f"**Caption:** {caption}<br>**Reasoning:** {reasoning}"
+
+        detected_objects = ", ".join([f"{d['label']} ({d['confidence']:.2f})" for d in yolo_detections])
+        if not detected_objects:
+            detected_objects = "None"
+            
+        md_content.append(f"| {thumb_md} | {vlm_text} | {detected_objects} |")
+
+    # --- 4. Add Metrics ---
+    md_content.extend([
+        "\n## Processing Metrics",
+        f"- **Total Pipeline Duration:** {metrics.get('total_duration', 0):.2f}s",
+        f"- **VLM Analysis:** {metrics.get('vlm_duration', 0):.2f}s",
+        f"- **YOLO Inference & Save:** {metrics.get('yolo_duration', 0):.2f}s",
+        f"- **Top K Frames Selected:** {metrics.get('top_k_frames', 0)}",
+    ])
+
+    # --- 5. Write to file ---
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(md_content))
+
 def select_top_k_frames(results: List[Dict], k: int) -> List[Dict]:
     # Sort results by metadata relevance_score descending and take top k
     sorted_results = sorted(results, key=lambda x: x["metadata"].get("relevance_score", 0), reverse=True)
@@ -128,20 +206,35 @@ def process_video(video_path: str, query: str, top_k: int = 3):
             import json
             json.dump(enriched_results, f, indent=4)
 
-        # 6. Write metrics log
+        # 6. Collect metrics for reporting
         total_duration = time.time() - process_start_time
         avg_vlm_time = vlm_duration / len(vlm_results) if vlm_results else 0
+        metrics = {
+            "video_name": video_name,
+            "timestamp": timestamp,
+            "top_k_frames": len(top_k_frames),
+            "vlm_duration": vlm_duration,
+            "avg_vlm_time": avg_vlm_time,
+            "select_duration": select_duration,
+            "yolo_duration": yolo_duration,
+            "total_duration": total_duration,
+        }
+
+        # 7. Write metrics log
         metrics_path = os.path.join(output_dir, 'metrics.log')
         with open(metrics_path, 'w') as f:
-            f.write(f"Video Processed: {video_name}\n")
-            f.write(f"Timestamp: {timestamp}\n")
-            f.write(f"Top K Frames Selected: {len(top_k_frames)}\n")
+            f.write(f"Video Processed: {metrics['video_name']}\n")
+            f.write(f"Timestamp: {metrics['timestamp']}\n")
+            f.write(f"Top K Frames Selected: {metrics['top_k_frames']}\n")
             f.write("--- Timings ---\n")
-            f.write(f"VLM Analysis: {vlm_duration:.2f}s\n")
-            f.write(f"Average VLM time per frame batch: {avg_vlm_time:.2f}s\n")
-            f.write(f"Top-K Selection: {select_duration:.2f}s\n")
-            f.write(f"YOLO Inference & Save: {yolo_duration:.2f}s\n")
-            f.write(f"Total Pipeline Duration: {total_duration:.2f}s\n")
+            f.write(f"VLM Analysis: {metrics['vlm_duration']:.2f}s\n")
+            f.write(f"Average VLM time per frame batch: {metrics['avg_vlm_time']:.2f}s\n")
+            f.write(f"Top-K Selection: {metrics['select_duration']:.2f}s\n")
+            f.write(f"YOLO Inference & Save: {metrics['yolo_duration']:.2f}s\n")
+            f.write(f"Total Pipeline Duration: {metrics['total_duration']:.2f}s\n")
+
+        # 8. Generate Markdown Report
+        generate_markdown_report(enriched_results, output_dir, video_name, query, metrics)
 
         print(f"Finished processing video: {video_path}. Results in {output_dir}")
         return {video_path: {"status": "Success", "output_dir": output_dir}}
